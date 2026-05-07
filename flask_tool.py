@@ -8,8 +8,9 @@ from enum import Enum
 from typing import Any, TypeVar
 
 import flask
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel
+from werkzeug.exceptions import HTTPException
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -52,6 +53,49 @@ class ApiResult(dict):
     @classmethod
     def fail(cls, data: Any = None, message: str = "失败") -> 'ApiResult':
         return cls(1, data, message)
+
+
+def _handle_validation_error(e: ValidationError):
+    """处理 pydantic 参数校验异常"""
+    logging.error("参数校验失败: %s", e.errors())
+    return ApiResult.fail(
+        data=e.errors(),
+        message="请求参数错误"
+    ), 400
+
+
+def _handle_http_exception(e: HTTPException):
+    """
+    处理 flask / Werkzeug HTTP 异常
+    如：400 Bad Request 401 Unauthorized 403 Forbidden 404 Not Found 405 Method Not Allow
+    """
+    logging.warning(
+        "HTTP异常: code=%s, name=%s, description=%s",
+        e.code,
+        e.name,
+        e.description,
+    )
+
+    return ApiResult.fail(
+        data=None,
+        message=e.description or e.name,
+    ), e.code
+
+
+def _handle_exception(e: Exception):
+    """处理兜底异常"""
+    logging.exception("系统异常")
+    return ApiResult.fail(
+        data=None,
+        message=f"系统异常{e}，请联系管理员"
+    ), 500
+
+
+def add_error_handler(app: flask.Flask):
+    """注册 Flask 全局异常处理器"""
+    app.register_error_handler(ValidationError, _handle_validation_error)
+    app.register_error_handler(HTTPException, _handle_http_exception)
+    app.register_error_handler(Exception, _handle_exception)
 
 
 class CamelDTO(BaseModel):
